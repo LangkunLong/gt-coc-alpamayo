@@ -11,6 +11,10 @@ model: "gpt-4o-mini"
 input: "../coc_traces/physical_ai_inference_results.csv"
 output: "parsed_ontology.csv"
 
+# previous failed inputs
+input: "parse_errors_with_traces.csv"
+output: "parsed_ontology_append.csv"
+
 # Column names in the input CSV
 id_column: "clip_id"
 trace_column: "reasoning_trace"

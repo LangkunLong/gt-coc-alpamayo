@@ -1,7 +1,7 @@
 import pandas as pd
 
 # group all the failed clips with PARSE_ERROR in the parsed_ontology.csv and get their corresponding reasoning traces from physical_ai_inference_results.csv
-parsed_ontology = pd.read_csv('/home/larry/alpamayo/coc_ontology/gt-coc-alpamayo/llm_evaluator/parsed_ontology.csv')
+parsed_ontology = pd.read_csv('/home/larry/alpamayo/coc_ontology/gt-coc-alpamayo/llm_evaluator/parsed_ontology_append.csv')
 inference_results = pd.read_csv('/home/larry/alpamayo/coc_ontology/gt-coc-alpamayo/coc_traces/physical_ai_inference_results.csv')
 parse_error_rows = parsed_ontology[parsed_ontology.apply(lambda row: row.astype(str).str.contains('PARSE_ERROR').any(), axis=1)]
 
