@@ -1,29 +1,23 @@
 """
 CoC Reasoning Trace → Ontology Parser
 
+Reads configuration from config.yaml and API keys from .env.
 Parses reasoning traces into a structured driving ontology using an LLM
 with guaranteed structured output (Anthropic tool_use / OpenAI json_schema).
 
 Usage:
-    python run_pipeline.py \
-        --input traces.csv \
-        --output parsed_ontology.csv \
-        --provider anthropic \
-        --model claude-sonnet-4-20250514 \
-        --concurrency 5
-
-Supported providers: anthropic, openai
+    python run_pipeline.py
 """
 
-import argparse
 import asyncio
 import csv
 import json
 import logging
 import os
 import sys
-import time
 from pathlib import Path
+
+import yaml
 
 from schema import (
     SCHEMA,
@@ -46,6 +40,61 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+DEFAULTS = {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "input": "coc_traces/physical_ai_inference_results.csv",
+    "output": "parsed_ontology.csv",
+    "id_column": "clip_id",
+    "trace_column": "reasoning_trace",
+    "concurrency": 5,
+    "max_retries": 3,
+    "max_tokens": 4096,
+    "temperature": 0.0,
+}
+
+
+def load_config() -> dict:
+    """Load configuration from config.yaml, falling back to defaults."""
+    config = dict(DEFAULTS)
+
+    path = Path("config.yaml")
+    if path.exists():
+        with open(path, "r") as f:
+            file_config = yaml.safe_load(f) or {}
+        config.update({k: v for k, v in file_config.items() if v is not None})
+        logger.info(f"Loaded config from {path}")
+    else:
+        logger.warning("config.yaml not found, using defaults")
+
+    return config
+
+
+def load_env():
+    """Load .env file from the current directory if it exists."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+
+    with open(env_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("'\"")
+                if key and value:
+                    os.environ[key] = value
+
+    logger.info("Loaded API keys from .env")
+
+
+# ---------------------------------------------------------------------------
 # LLM Client with Structured Output
 # ---------------------------------------------------------------------------
 
@@ -53,23 +102,30 @@ class LLMClient:
     """
     Wrapper around LLM APIs that enforces structured output.
 
-    - Anthropic: tool_use forces the model to return JSON matching the schema.
-    - OpenAI: json_schema response_format constrains token generation.
+    - Anthropic: tool_use forces JSON matching the schema.
+    - OpenAI: json_schema response_format constrains generation.
     """
 
-    def __init__(self, provider: str, model: str, api_key: str | None = None):
-        self.provider = provider
-        self.model = model
+    def __init__(self, config: dict):
+        self.provider = config["provider"]
+        self.model = config["model"]
+        self.max_tokens = config["max_tokens"]
+        self.temperature = config["temperature"]
         self._async_client = None
-        self._init_client(api_key)
+        self._init_client()
 
-    def _init_client(self, api_key: str | None):
+    def _init_client(self):
         if self.provider == "anthropic":
             try:
                 from anthropic import AsyncAnthropic
             except ImportError:
                 raise ImportError("pip install anthropic")
-            key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+            key = os.environ.get("CLAUDE_API_KEY")
+            if not key:
+                raise ValueError(
+                    "CLAUDE_API_KEY not found. "
+                    "Set it in .env or as an environment variable."
+                )
             self._async_client = AsyncAnthropic(api_key=key)
 
         elif self.provider == "openai":
@@ -77,13 +133,17 @@ class LLMClient:
                 from openai import AsyncOpenAI
             except ImportError:
                 raise ImportError("pip install openai")
-            key = api_key or os.environ.get("OPENAI_API_KEY")
+            key = os.environ.get("OPENAi_API_KEY")
+            if not key:
+                raise ValueError(
+                    "OPENAi_API_KEY not found. "
+                    "Set it in .env or as an environment variable."
+                )
             self._async_client = AsyncOpenAI(api_key=key)
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
 
     async def call(self, system_prompt: str, user_prompt: str) -> dict:
-        """Async structured call. Returns parsed dict."""
         if self.provider == "anthropic":
             return await self._call_anthropic(system_prompt, user_prompt)
         else:
@@ -93,12 +153,12 @@ class LLMClient:
         tool = get_anthropic_tool_definition()
         response = await self._async_client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=self.max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
             tools=[tool],
             tool_choice={"type": "tool", "name": "submit_ontology_parse"},
-            temperature=0.0,
+            temperature=self.temperature,
         )
         for block in response.content:
             if block.type == "tool_use" and block.name == "submit_ontology_parse":
@@ -108,13 +168,13 @@ class LLMClient:
     async def _call_openai(self, system_prompt: str, user_prompt: str) -> dict:
         response = await self._async_client.chat.completions.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=self.max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             response_format=get_openai_response_format(),
-            temperature=0.0,
+            temperature=self.temperature,
         )
         return json.loads(response.choices[0].message.content)
 
@@ -139,7 +199,6 @@ def validate_field(field: str, raw_value: str) -> tuple[str, list[str]]:
         if v in allowed:
             cleaned.append(v)
         else:
-            # Fuzzy: substring match
             match = next((a for a in allowed if v in a or a in v), None)
             if match:
                 cleaned.append(match)
@@ -186,15 +245,11 @@ async def process_trace(
     clip_id: str,
     trace: str,
     semaphore: asyncio.Semaphore,
-    max_retries: int = 3,
+    max_retries: int,
 ) -> list[dict]:
     """Process one trace with concurrency control and retries."""
 
-    user_prompt = (
-        build_user_prompt(clip_id, trace)
-        if client.provider == "anthropic"
-        else build_user_prompt_openai(clip_id, trace)
-    )
+    user_prompt = build_user_prompt(clip_id, trace) if client.provider == "anthropic" else build_user_prompt_openai(clip_id, trace)
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -231,41 +286,51 @@ async def process_trace(
 # Pipeline
 # ---------------------------------------------------------------------------
 
-async def run_pipeline(args):
+async def run_pipeline(config: dict):
     """Read CSV → evaluate each trace → write output CSV."""
 
-    client = LLMClient(args.provider, args.model, args.api_key)
+    client = LLMClient(config)
     system_prompt = build_system_prompt()
 
     # Read input
-    input_path = Path(args.input)
+    input_path = Path(config["input"])
+    if not input_path.exists():
+        logger.error(f"Input file not found: {input_path}")
+        sys.exit(1)
+
     with open(input_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        for col in [args.id_column, args.trace_column]:
+        for col in [config["id_column"], config["trace_column"]]:
             if col not in reader.fieldnames:
-                logger.error(f"Column '{col}' not found. Available: {reader.fieldnames}")
+                logger.error(
+                    f"Column '{col}' not found. Available: {reader.fieldnames}"
+                )
                 sys.exit(1)
         input_rows = list(reader)
 
     logger.info(f"Loaded {len(input_rows)} traces from {input_path}")
+    logger.info(
+        f"Provider: {config['provider']} | Model: {config['model']} | "
+        f"Concurrency: {config['concurrency']}"
+    )
 
-    # Process all traces concurrently
-    semaphore = asyncio.Semaphore(args.concurrency)
+    # Process all traces
+    semaphore = asyncio.Semaphore(config["concurrency"])
     tasks = [
         process_trace(
             client, system_prompt,
-            row[args.id_column], row[args.trace_column],
-            semaphore, args.max_retries,
+            row[config["id_column"]], row[config["trace_column"]],
+            semaphore, config["max_retries"],
         )
         for row in input_rows
-        if row[args.trace_column].strip()
+        if row[config["trace_column"]].strip()
     ]
 
     results = await asyncio.gather(*tasks)
     all_rows = [row for result in results for row in result]
 
     # Write output
-    output_path = Path(args.output)
+    output_path = Path(config["output"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -278,7 +343,7 @@ async def run_pipeline(args):
     conf = {"high": 0, "medium": 0, "low": 0}
     errors = 0
     for row in all_rows:
-        conf[row.get("confidence", "low")] = conf.get(row.get("confidence", "low"), 0) + 1
+        conf[row.get("confidence", "low")] += 1
         if row.get("maneuver_lat") == "PARSE_ERROR":
             errors += 1
 
@@ -286,22 +351,10 @@ async def run_pipeline(args):
     logger.info(f"Confidence: {conf} | Errors: {errors}")
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 def main():
-    p = argparse.ArgumentParser(description="Parse CoC traces into driving ontology.")
-    p.add_argument("--input", "-i", required=True, help="Input CSV path.")
-    p.add_argument("--output", "-o", default="parsed_ontology.csv", help="Output CSV path.")
-    p.add_argument("--provider", default="anthropic", choices=["anthropic", "openai"])
-    p.add_argument("--model", default="claude-sonnet-4-20250514")
-    p.add_argument("--api-key", default=None, help="API key (overrides env var).")
-    p.add_argument("--id-column", default="clip_id")
-    p.add_argument("--trace-column", default="reasoning_trace")
-    p.add_argument("--concurrency", type=int, default=5, help="Max parallel requests.")
-    p.add_argument("--max-retries", type=int, default=3)
-    asyncio.run(run_pipeline(p.parse_args()))
+    load_env()
+    config = load_config()
+    asyncio.run(run_pipeline(config))
 
 
 if __name__ == "__main__":
