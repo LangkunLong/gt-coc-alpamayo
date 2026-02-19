@@ -1,3 +1,4 @@
 .env
+__pycache__/
 alpamayo_paper.pdf
 Schematic Diagram.pptx

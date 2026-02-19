@@ -8,7 +8,7 @@ provider: "openai"
 model: "gpt-4o-mini"
 
 # --- Input / Output ---
-input: "coc_traces/physical_ai_inference_results.csv"
+input: "../coc_traces/physical_ai_inference_results.csv"
 output: "parsed_ontology.csv"
 
 # Column names in the input CSV
