@@ -4,11 +4,7 @@
 Parses Alpamayo-R1 Chain of Causation (CoC) reasoning traces into a structured
 driving ontology using an LLM with guaranteed structured output.
 
-## How Structured Output Works
-
-**Anthropic (tool_use):** A `submit_ontology_parse` tool is defined with a JSON
-schema matching the ontology. Setting `tool_choice` to this tool forces the model
-to return structured JSON — no parsing ambiguity.
+## Structured Output
 
 **OpenAI (json_schema):** Uses `response_format` with `strict: True` to constrain
 token generation so only valid schema-conforming JSON is produced.
@@ -16,29 +12,19 @@ token generation so only valid schema-conforming JSON is produced.
 ## Setup
 
 ```bash
-pip install anthropic   # for Claude
-pip install openai      # for OpenAI (optional)
-
-export ANTHROPIC_API_KEY="sk-ant-..."
+sudo apt update && sudo apt install python3-venv -y
+python3 -m venv openai-env
+source openai-env/bin/activate
+pip install openai  
 ```
 
 ## Usage
 
 ```bash
-# Basic
-python run_pipeline.py --input traces.csv --output parsed_ontology.csv
-
-# Faster with more concurrency
-python run_pipeline.py --input traces.csv --output parsed.csv --concurrency 10
-
-# OpenAI
-python run_pipeline.py --input traces.csv --output parsed.csv --provider openai --model gpt-4o
-
-# Custom columns
-python run_pipeline.py --input data.csv --output out.csv --id-column id --trace-column text
+python run_pipeline.py 
 ```
 
-## CLI Arguments
+## Config file arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
@@ -91,7 +77,6 @@ All enum fields accept comma-separated values. See `schema.py` for vocabularies.
 
 ```
 schema.py          Closed vocabularies, Table 1/2 definitions, JSON schema for tool_use
-prompts.py         System prompt with maneuver definitions and disambiguation rules
-run_pipeline.py    Main pipeline: async concurrency, structured output, validation
-sample_traces.csv  12 example traces for testing
+rag.py         System prompt with maneuver definitions and disambiguation rules
+run.py    Main pipeline: async concurrency, structured output, validation
 ```
