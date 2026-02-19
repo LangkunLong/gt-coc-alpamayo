@@ -1,0 +1,29 @@
+# --- LLM Provider ---
+# Supported: "anthropic", "openai"
+provider: "openai"
+
+# Model name (must match the provider)
+# Anthropic: claude-sonnet-4-20250514, claude-haiku-4-5-20251001, etc.
+# OpenAI: gpt-4o, gpt-4o-mini, etc.
+model: "gpt-4o-mini"
+
+# --- Input / Output ---
+input: "../coc_traces/physical_ai_inference_results.csv"
+output: "parsed_ontology.csv"
+
+# Column names in the input CSV
+id_column: "clip_id"
+trace_column: "reasoning_trace"
+
+# --- Performance ---
+# Max parallel API requests
+concurrency: 5
+
+# Max retries per trace on transient failure
+max_retries: 3
+
+# Max tokens for LLM response
+max_tokens: 4096
+
+# Temperature (0.0 = deterministic)
+temperature: 0.0
